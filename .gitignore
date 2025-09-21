@@ -1,0 +1,30 @@
+# MetaTrader 5 files
+*.ex5
+*.log
+*.csv
+
+# Backup files
+*.bak
+*.old
+*~
+
+# Test results
+*.htm
+*.html
+tester/
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+temp/
+tmp/
