@@ -119,11 +119,92 @@ public:
     //| Verificar se tem ordens pendentes                               |
     //+------------------------------------------------------------------+
     bool HasPendingOrders() {
-        // Verificar se as ordens existem
-        bool upperExists = OrderExists(m_upperOrderTicket);
-        bool lowerExists = OrderExists(m_lowerOrderTicket);
+        // Verificar diretamente no mercado se há ordens pendentes do EA
+        for(int i = OrdersTotal() - 1; i >= 0; i--) {
+            if(OrderSelect(OrderGetTicket(i))) {
+                if(OrderGetString(ORDER_SYMBOL) == m_symbol &&
+                   OrderGetInteger(ORDER_MAGIC) == m_magicNumber) {
+                    return true;  // Tem pelo menos uma ordem pendente
+                }
+            }
+        }
+        return false;  // Não tem nenhuma ordem pendente
+    }
 
-        return (upperExists && lowerExists);
+    //+------------------------------------------------------------------+
+    //| Verificar se tem ordens ou posições no lado comprador           |
+    //+------------------------------------------------------------------+
+    bool HasBuySideOrders() {
+        // Verificar se tem posição de compra
+        for(int i = PositionsTotal() - 1; i >= 0; i--) {
+            if(PositionSelectByTicket(PositionGetTicket(i))) {
+                if(PositionGetString(POSITION_SYMBOL) == m_symbol &&
+                   PositionGetInteger(POSITION_MAGIC) == m_magicNumber &&
+                   PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+                    if(m_debugMode) {
+                        Print("HasBuySideOrders: TRUE - Tem posição BUY");
+                    }
+                    return true;  // Tem posição de compra
+                }
+            }
+        }
+
+        // Verificar se tem ordem BuyStop pendente
+        for(int i = OrdersTotal() - 1; i >= 0; i--) {
+            if(OrderSelect(OrderGetTicket(i))) {
+                if(OrderGetString(ORDER_SYMBOL) == m_symbol &&
+                   OrderGetInteger(ORDER_MAGIC) == m_magicNumber &&
+                   OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_STOP) {
+                    if(m_debugMode) {
+                        Print("HasBuySideOrders: TRUE - Tem ordem BUY_STOP");
+                    }
+                    return true;  // Tem ordem BuyStop pendente
+                }
+            }
+        }
+
+        if(m_debugMode) {
+            Print("HasBuySideOrders: FALSE - Lado comprador livre");
+        }
+        return false;  // Não tem nada no lado comprador
+    }
+
+    //+------------------------------------------------------------------+
+    //| Verificar se tem ordens ou posições no lado vendedor            |
+    //+------------------------------------------------------------------+
+    bool HasSellSideOrders() {
+        // Verificar se tem posição de venda
+        for(int i = PositionsTotal() - 1; i >= 0; i--) {
+            if(PositionSelectByTicket(PositionGetTicket(i))) {
+                if(PositionGetString(POSITION_SYMBOL) == m_symbol &&
+                   PositionGetInteger(POSITION_MAGIC) == m_magicNumber &&
+                   PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+                    if(m_debugMode) {
+                        Print("HasSellSideOrders: TRUE - Tem posição SELL");
+                    }
+                    return true;  // Tem posição de venda
+                }
+            }
+        }
+
+        // Verificar se tem ordem SellStop pendente
+        for(int i = OrdersTotal() - 1; i >= 0; i--) {
+            if(OrderSelect(OrderGetTicket(i))) {
+                if(OrderGetString(ORDER_SYMBOL) == m_symbol &&
+                   OrderGetInteger(ORDER_MAGIC) == m_magicNumber &&
+                   OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_SELL_STOP) {
+                    if(m_debugMode) {
+                        Print("HasSellSideOrders: TRUE - Tem ordem SELL_STOP");
+                    }
+                    return true;  // Tem ordem SellStop pendente
+                }
+            }
+        }
+
+        if(m_debugMode) {
+            Print("HasSellSideOrders: FALSE - Lado vendedor livre");
+        }
+        return false;  // Não tem nada no lado vendedor
     }
 
     //+------------------------------------------------------------------+
@@ -156,7 +237,7 @@ public:
     }
 
     //+------------------------------------------------------------------+
-    //| Criar ordens Buy Stop e Sell Stop                               |
+    //| Criar ordens Buy Stop e Sell Stop (Per-Side Independently)      |
     //+------------------------------------------------------------------+
     bool CreatePendingOrders(double bidPrice, double askPrice, double distance,
                             double slPoints, double tpPoints, double lotSize) {
@@ -165,21 +246,16 @@ public:
         WriteDebugLog(StringFormat("CreatePendingOrders: Bid=%.5f Ask=%.5f Dist=%.1f",
                                  bidPrice, askPrice, distance));
 
-        // Verificar se já tem posição aberta
-        if(HasPosition()) {
+        // NOVA LÓGICA: Verificar cada lado independentemente
+        bool canCreateBuyStop = !HasBuySideOrders();
+        bool canCreateSellStop = !HasSellSideOrders();
+
+        // Se não pode criar nenhuma ordem, retornar
+        if(!canCreateBuyStop && !canCreateSellStop) {
             if(m_debugMode) {
-                WriteDebugLog("BLOQUEIO: Já tem posição aberta");
+                WriteDebugLog("BLOQUEIO: Ambos os lados têm ordens ou posições");
             }
             return false;
-        }
-
-        // Verificar ordens existentes
-        bool upperExists = OrderExists(m_upperOrderTicket);
-        bool lowerExists = OrderExists(m_lowerOrderTicket);
-
-        // Se ambas existem, tudo OK
-        if(upperExists && lowerExists) {
-            return true;
         }
 
         double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
@@ -189,79 +265,97 @@ public:
 
         bool success = true;
 
-        // Criar Buy Stop (upper) se não existe
-        if(!upperExists) {
-            double slBuy = 0;
-            double tpBuy = 0;
+        // Criar Buy Stop se o lado comprador está livre
+        if(canCreateBuyStop) {
+            // Verificar se já não existe uma ordem pendente específica
+            bool upperExists = OrderExists(m_upperOrderTicket);
 
-            if(slPoints > 0) {
-                slBuy = NormalizeDouble(upperPrice - slPoints * point, _Digits);
-            }
-            if(tpPoints > 0) {
-                tpBuy = NormalizeDouble(upperPrice + tpPoints * point, _Digits);
-            }
+            if(!upperExists) {
+                double slBuy = 0;
+                double tpBuy = 0;
 
-            string comment = "";
-            if(m_trackingMgr != NULL) {
-                comment = m_trackingMgr.GetUniqueComment("BUYSTOP");
-            }
+                if(slPoints > 0) {
+                    slBuy = NormalizeDouble(upperPrice - slPoints * point, _Digits);
+                }
+                if(tpPoints > 0) {
+                    tpBuy = NormalizeDouble(upperPrice + tpPoints * point, _Digits);
+                }
 
-            if(m_trade.BuyStop(lotSize, upperPrice, m_symbol, slBuy, tpBuy, 0, 0, comment)) {
-                m_upperOrderTicket = m_trade.ResultOrder();
-
-                // Registrar no TrackingManager imediatamente
+                string comment = "";
                 if(m_trackingMgr != NULL) {
-                    m_trackingMgr.RegisterOrder(m_upperOrderTicket, comment, false);
+                    comment = m_trackingMgr.GetUniqueComment("BUYSTOP");
                 }
 
-                if(m_debugMode) {
-                    Print("✅ Buy Stop criado: #", m_upperOrderTicket,
-                          " em ", DoubleToString(upperPrice, _Digits),
-                          " Comment: ", comment);
+                if(m_trade.BuyStop(lotSize, upperPrice, m_symbol, slBuy, tpBuy, 0, 0, comment)) {
+                    m_upperOrderTicket = m_trade.ResultOrder();
+
+                    // Registrar no TrackingManager imediatamente
+                    if(m_trackingMgr != NULL) {
+                        m_trackingMgr.RegisterOrder(m_upperOrderTicket, comment, false);
+                    }
+
+                    if(m_debugMode) {
+                        Print("✅ Buy Stop criado: #", m_upperOrderTicket,
+                              " em ", DoubleToString(upperPrice, _Digits),
+                              " Comment: ", comment);
+                    }
+                } else {
+                    success = false;
+                    if(m_debugMode) {
+                        Print("❌ Falha ao criar Buy Stop: ", m_trade.ResultComment());
+                    }
                 }
-            } else {
-                success = false;
-                if(m_debugMode) {
-                    Print("❌ Falha ao criar Buy Stop: ", m_trade.ResultComment());
-                }
+            }
+        } else {
+            if(m_debugMode) {
+                WriteDebugLog("INFO: Lado comprador já tem ordem ou posição, não criando Buy Stop");
             }
         }
 
-        // Criar Sell Stop (lower) se não existe
-        if(!lowerExists) {
-            double slSell = 0;
-            double tpSell = 0;
+        // Criar Sell Stop se o lado vendedor está livre
+        if(canCreateSellStop) {
+            // Verificar se já não existe uma ordem pendente específica
+            bool lowerExists = OrderExists(m_lowerOrderTicket);
 
-            if(slPoints > 0) {
-                slSell = NormalizeDouble(lowerPrice + slPoints * point, _Digits);
-            }
-            if(tpPoints > 0) {
-                tpSell = NormalizeDouble(lowerPrice - tpPoints * point, _Digits);
-            }
+            if(!lowerExists) {
+                double slSell = 0;
+                double tpSell = 0;
 
-            string comment = "";
-            if(m_trackingMgr != NULL) {
-                comment = m_trackingMgr.GetUniqueComment("SELLSTOP");
-            }
+                if(slPoints > 0) {
+                    slSell = NormalizeDouble(lowerPrice + slPoints * point, _Digits);
+                }
+                if(tpPoints > 0) {
+                    tpSell = NormalizeDouble(lowerPrice - tpPoints * point, _Digits);
+                }
 
-            if(m_trade.SellStop(lotSize, lowerPrice, m_symbol, slSell, tpSell, 0, 0, comment)) {
-                m_lowerOrderTicket = m_trade.ResultOrder();
-
-                // Registrar no TrackingManager imediatamente
+                string comment = "";
                 if(m_trackingMgr != NULL) {
-                    m_trackingMgr.RegisterOrder(m_lowerOrderTicket, comment, false);
+                    comment = m_trackingMgr.GetUniqueComment("SELLSTOP");
                 }
 
-                if(m_debugMode) {
-                    Print("✅ Sell Stop criado: #", m_lowerOrderTicket,
-                          " em ", DoubleToString(lowerPrice, _Digits),
-                          " Comment: ", comment);
+                if(m_trade.SellStop(lotSize, lowerPrice, m_symbol, slSell, tpSell, 0, 0, comment)) {
+                    m_lowerOrderTicket = m_trade.ResultOrder();
+
+                    // Registrar no TrackingManager imediatamente
+                    if(m_trackingMgr != NULL) {
+                        m_trackingMgr.RegisterOrder(m_lowerOrderTicket, comment, false);
+                    }
+
+                    if(m_debugMode) {
+                        Print("✅ Sell Stop criado: #", m_lowerOrderTicket,
+                              " em ", DoubleToString(lowerPrice, _Digits),
+                              " Comment: ", comment);
+                    }
+                } else {
+                    success = false;
+                    if(m_debugMode) {
+                        Print("❌ Falha ao criar Sell Stop: ", m_trade.ResultComment());
+                    }
                 }
-            } else {
-                success = false;
-                if(m_debugMode) {
-                    Print("❌ Falha ao criar Sell Stop: ", m_trade.ResultComment());
-                }
+            }
+        } else {
+            if(m_debugMode) {
+                WriteDebugLog("INFO: Lado vendedor já tem ordem ou posição, não criando Sell Stop");
             }
         }
 

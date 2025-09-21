@@ -387,15 +387,15 @@ void OnTick() {
     // Verificar spread
     if(!spreadMgr.ValidateSpread()) return;  // CheckSpread n\u00e3o existe, usar ValidateSpread
 
-    // Verificar posições e ordens pendentes
-    if(orderMgr.HasPosition() || orderMgr.HasPendingOrders()) {
+    // NOVA LÓGICA PER-SIDE: Não bloquear se temos ordens/posições
+    // Apenas atualizar o painel se já temos algo
+    if(orderMgr.HasBuySideOrders() || orderMgr.HasSellSideOrders()) {
         if(tickCounter % 10 == 0) {
             panelMgr.Update();  // UpdateState não existe, usar Update
         }
-        return;  // Já tem posição ou ordens pendentes, não criar novas
     }
 
-    // PROCESSAR SINAL DO MÉTODO PRINCIPAL
+    // PROCESSAR SINAL DO MÉTODO PRINCIPAL (agora sempre processa, a lógica per-side está no OrderManager)
     ProcessMethodSignal();
 
     // Atualizar painel
@@ -448,69 +448,31 @@ void ProcessHedgeLineEntry() {
 
     double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
     double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-
-    double buyStopPrice = NormalizeDouble(ask + distance * point, symbolInfo.Digits());
-    double sellStopPrice = NormalizeDouble(bid - distance * point, symbolInfo.Digits());
-
-    if(buyStopPrice <= ask || sellStopPrice >= bid) return;
-
-    double buyTP = NormalizeDouble(buyStopPrice + tpPoints * point, symbolInfo.Digits());
-    double buySL = NormalizeDouble(buyStopPrice - slPoints * point, symbolInfo.Digits());
-    double sellTP = NormalizeDouble(sellStopPrice - tpPoints * point, symbolInfo.Digits());
-    double sellSL = NormalizeDouble(sellStopPrice + slPoints * point, symbolInfo.Digits());
-
-    // Aplicar ajustes do método auxiliar se houver
-    if(auxMethod1 != NULL && InpAuxMethod1 == AUX_SUPDEM_VOLBASED) {
-        double support = auxMethod1.GetSupportLevel();
-        double resistance = auxMethod1.GetResistanceLevel();
-
-        if(support > 0 && buySL < support) {
-            buySL = support - 10 * point;
-            if(InpDebugAuxiliar) Print("🔧 SL de compra ajustado para suporte");
-        }
-
-        if(resistance > 0 && sellTP < resistance) {
-            sellTP = resistance - 5 * point;
-            if(InpDebugAuxiliar) Print("🔧 TP de venda ajustado para resistência");
-        }
-    }
 
     if(InpDebugMain) {
-        Print("\n=== ABRINDO ORDENS (", mainMethod.GetMethodName(), ") ===");
-        if(auxMethod1 != NULL) {
-            Print("  Com filtro: ", auxMethod1.GetMethodName());
+        Print("\n=== PROCESSANDO HEDGELINE ===");
+        Print("  Distance: ", distance);
+        Print("  TP: ", tpPoints, " SL: ", slPoints);
+        Print("  Bid: ", bid, " Ask: ", ask);
+    }
+
+    // Usar o OrderManager com a nova lógica per-side
+    // O OrderManager agora verifica cada lado independentemente
+    bool success = orderMgr.CreatePendingOrders(bid, ask, distance, slPoints, tpPoints, InpLotSize);
+
+    if(success) {
+        // distanceMgr.RegisterTrade(); // Method not available in current DistanceControl
+        stateMgr.IncrementDailyTrades();
+        stateMgr.UpdateReversals(0, false);
+
+        if(InpDebugMain) {
+            Print("✅ Ordens criadas com sucesso (lógica per-side)");
         }
-        Print("BUY STOP: ", buyStopPrice, " TP=", buyTP, " SL=", buySL);
-        Print("SELL STOP: ", sellStopPrice, " TP=", sellTP, " SL=", sellSL);
-    }
-
-    string timestamp = IntegerToString(GetTickCount());
-    string buyComment = InpComment + "_BUY_" + timestamp;
-    string sellComment = InpComment + "_SELL_" + timestamp;
-
-    trackingMgr.OnPendingOrderPlacement("BUYSTOP", buyStopPrice, InpLotSize, buyTP, buySL, buyComment);
-    trackingMgr.OnPendingOrderPlacement("SELLSTOP", sellStopPrice, InpLotSize, sellTP, sellSL, sellComment);
-
-    trade.BuyStop(InpLotSize, buyStopPrice, Symbol(), buySL, buyTP, ORDER_TIME_DAY, 0, buyComment);
-    if(trade.ResultRetcode() != TRADE_RETCODE_DONE) {
-        Print("ERRO BUY STOP: ", trade.ResultRetcodeDescription());
-        trackingMgr.OnOrderError("BUYSTOP", trade.ResultRetcode(), trade.ResultRetcodeDescription());
     } else {
-        trackingMgr.OnPendingOrderSuccess("BUYSTOP", trade.ResultOrder());
+        if(InpDebugMain) {
+            Print("⚠️ Nenhuma ordem criada (ambos os lados já têm ordens/posições)");
+        }
     }
-
-    trade.SellStop(InpLotSize, sellStopPrice, Symbol(), sellSL, sellTP, ORDER_TIME_DAY, 0, sellComment);
-    if(trade.ResultRetcode() != TRADE_RETCODE_DONE) {
-        Print("ERRO SELL STOP: ", trade.ResultRetcodeDescription());
-        trackingMgr.OnOrderError("SELLSTOP", trade.ResultRetcode(), trade.ResultRetcodeDescription());
-    } else {
-        trackingMgr.OnPendingOrderSuccess("SELLSTOP", trade.ResultOrder());
-    }
-
-    // distanceMgr.RegisterTrade(); // Method not available in current DistanceControl
-    stateMgr.IncrementDailyTrades();
-    stateMgr.UpdateReversals(0, false);
 }
 
 //+------------------------------------------------------------------+
