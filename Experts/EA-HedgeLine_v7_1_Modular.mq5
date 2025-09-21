@@ -387,12 +387,12 @@ void OnTick() {
     // Verificar spread
     if(!spreadMgr.ValidateSpread()) return;  // CheckSpread n\u00e3o existe, usar ValidateSpread
 
-    // Verificar posições
-    if(orderMgr.HasPosition()) {
+    // Verificar posições e ordens pendentes
+    if(orderMgr.HasPosition() || orderMgr.HasPendingOrders()) {
         if(tickCounter % 10 == 0) {
             panelMgr.Update();  // UpdateState não existe, usar Update
         }
-        return;
+        return;  // Já tem posição ou ordens pendentes, não criar novas
     }
 
     // PROCESSAR SINAL DO MÉTODO PRINCIPAL
